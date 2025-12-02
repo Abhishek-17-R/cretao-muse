@@ -14,18 +14,23 @@ interface Message {
 
 interface ChatInterfaceProps {
   userId: string;
+  conversationId: string | null;
+  onConversationIdChange: (id: string) => void;
 }
 
-const ChatInterface = ({ userId }: ChatInterfaceProps) => {
+const ChatInterface = ({ userId, conversationId, onConversationIdChange }: ChatInterfaceProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [conversationId, setConversationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    initializeConversation();
-  }, [userId]);
+    if (!conversationId) {
+      initializeConversation();
+    } else {
+      loadMessages(conversationId);
+    }
+  }, [conversationId, userId]);
 
   useEffect(() => {
     scrollToBottom();
@@ -60,9 +65,19 @@ const ChatInterface = ({ userId }: ChatInterfaceProps) => {
         convId = newConversation.id;
       }
 
-      setConversationId(convId);
+      onConversationIdChange(convId);
+      loadMessages(convId);
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    }
+  };
 
-      // Load messages
+  const loadMessages = async (convId: string) => {
+    try {
       const { data: messagesData } = await supabase
         .from("messages")
         .select("*")
@@ -74,7 +89,7 @@ const ChatInterface = ({ userId }: ChatInterfaceProps) => {
       }
     } catch (error: any) {
       toast({
-        title: "Error",
+        title: "Error loading messages",
         description: error.message,
         variant: "destructive",
       });
@@ -102,6 +117,12 @@ const ChatInterface = ({ userId }: ChatInterfaceProps) => {
       if (userError) throw userError;
 
       setMessages((prev) => [...prev, userMessage as Message]);
+
+      // Update conversation timestamp
+      await supabase
+        .from("conversations")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", conversationId);
 
       // Call appropriate edge function
       const functionName = requestImage ? "generate-image" : "chat-assistant";
