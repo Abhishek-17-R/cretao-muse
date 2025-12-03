@@ -61,7 +61,8 @@ export function AppSidebar({
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [newTitle, setNewTitle] = useState("");
-  const { collapsed } = useSidebar();
+  const { state } = useSidebar();
+  const collapsed = state === "collapsed";
   const { toast } = useToast();
 
   useEffect(() => {
@@ -179,7 +180,7 @@ export function AppSidebar({
 
   return (
     <>
-      <Sidebar className={collapsed ? "w-14" : "w-64"} collapsible>
+      <Sidebar className={collapsed ? "w-14" : "w-64"} collapsible="icon">
         <SidebarTrigger className="m-2 self-end" />
 
         <SidebarContent>
