@@ -2,7 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import MessageList from "./MessageList";
-import MessageInput from "./MessageInput";
+import MessageInput, { MessageMode } from "./MessageInput";
+import PipelineProgress from "./PipelineProgress";
+import DocumentsDialog from "./DocumentsDialog";
 
 interface Message {
   id: string;
@@ -10,6 +12,11 @@ interface Message {
   content: string;
   image_url?: string;
   created_at: string;
+}
+
+interface PipelineStage {
+  agent: string;
+  status: "pending" | "running" | "complete";
 }
 
 interface ChatInterfaceProps {
@@ -21,6 +28,8 @@ interface ChatInterfaceProps {
 const ChatInterface = ({ userId, conversationId, onConversationIdChange }: ChatInterfaceProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [pipelineStages, setPipelineStages] = useState<PipelineStage[] | null>(null);
+  const [documentsOpen, setDocumentsOpen] = useState(false);
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -42,7 +51,6 @@ const ChatInterface = ({ userId, conversationId, onConversationIdChange }: ChatI
 
   const initializeConversation = async () => {
     try {
-      // Get or create conversation
       const { data: existingConversations } = await supabase
         .from("conversations")
         .select("*")
@@ -96,10 +104,36 @@ const ChatInterface = ({ userId, conversationId, onConversationIdChange }: ChatI
     }
   };
 
-  const handleSendMessage = async (content: string, requestImage: boolean = false) => {
+  const fetchRAGContext = async (): Promise<string> => {
+    try {
+      const { data } = await supabase
+        .from("documents")
+        .select("content")
+        .eq("user_id", userId)
+        .limit(5);
+
+      if (data && data.length > 0) {
+        return data.map((d) => d.content).join("\n\n---\n\n");
+      }
+    } catch (error) {
+      console.error("Error fetching RAG context:", error);
+    }
+    return "";
+  };
+
+  const handleSendMessage = async (content: string, mode: MessageMode = "chat") => {
     if (!conversationId) return;
 
     setLoading(true);
+
+    // Initialize pipeline progress for pipeline mode
+    if (mode === "pipeline") {
+      setPipelineStages([
+        { agent: "Idea Agent", status: "pending" },
+        { agent: "Draft Agent", status: "pending" },
+        { agent: "Editor Agent", status: "pending" },
+      ]);
+    }
 
     try {
       // Save user message
@@ -124,13 +158,56 @@ const ChatInterface = ({ userId, conversationId, onConversationIdChange }: ChatI
         .update({ updated_at: new Date().toISOString() })
         .eq("id", conversationId);
 
-      // Call appropriate edge function
-      const functionName = requestImage ? "generate-image" : "chat-assistant";
+      // Determine function and prepare body
+      let functionName: string;
+      let body: any = { message: content, conversationId };
+
+      if (mode === "image") {
+        functionName = "generate-image";
+      } else if (mode === "pipeline") {
+        functionName = "content-pipeline";
+        // Fetch RAG context for pipeline
+        const ragContext = await fetchRAGContext();
+        body.context = ragContext;
+
+        // Simulate pipeline progress
+        setPipelineStages((prev) =>
+          prev?.map((s, i) => (i === 0 ? { ...s, status: "running" } : s)) || null
+        );
+
+        // Add delay to show progress (actual processing happens in edge function)
+        setTimeout(() => {
+          setPipelineStages((prev) =>
+            prev?.map((s, i) =>
+              i === 0 ? { ...s, status: "complete" } : i === 1 ? { ...s, status: "running" } : s
+            ) || null
+          );
+        }, 2000);
+
+        setTimeout(() => {
+          setPipelineStages((prev) =>
+            prev?.map((s, i) =>
+              i <= 1 ? { ...s, status: "complete" } : i === 2 ? { ...s, status: "running" } : s
+            ) || null
+          );
+        }, 4000);
+      } else {
+        functionName = "chat-assistant";
+      }
+
       const { data, error } = await supabase.functions.invoke(functionName, {
-        body: { message: content, conversationId },
+        body,
       });
 
       if (error) throw error;
+
+      // Complete pipeline stages
+      if (mode === "pipeline") {
+        setPipelineStages((prev) =>
+          prev?.map((s) => ({ ...s, status: "complete" })) || null
+        );
+        setTimeout(() => setPipelineStages(null), 1500);
+      }
 
       // Save assistant response
       const { data: assistantMessage, error: assistantError } = await supabase
@@ -154,6 +231,7 @@ const ChatInterface = ({ userId, conversationId, onConversationIdChange }: ChatI
         description: error.message,
         variant: "destructive",
       });
+      setPipelineStages(null);
     } finally {
       setLoading(false);
     }
@@ -162,8 +240,22 @@ const ChatInterface = ({ userId, conversationId, onConversationIdChange }: ChatI
   return (
     <div className="flex h-full flex-col">
       <MessageList messages={messages} loading={loading} />
+      {pipelineStages && (
+        <div className="px-4 pb-2">
+          <PipelineProgress stages={pipelineStages} />
+        </div>
+      )}
       <div ref={messagesEndRef} />
-      <MessageInput onSend={handleSendMessage} disabled={loading} />
+      <MessageInput
+        onSend={handleSendMessage}
+        disabled={loading}
+        onOpenDocuments={() => setDocumentsOpen(true)}
+      />
+      <DocumentsDialog
+        open={documentsOpen}
+        onOpenChange={setDocumentsOpen}
+        userId={userId}
+      />
     </div>
   );
 };
